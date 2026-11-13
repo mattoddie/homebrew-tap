@@ -91,7 +91,6 @@ update_one() {
 class $(class_for "$server") < Formula
   desc "$(desc_for "$server")"
   homepage "https://$server.mattoddie.dev"
-  version "$version"
   license "MIT"
 
   on_macos do
