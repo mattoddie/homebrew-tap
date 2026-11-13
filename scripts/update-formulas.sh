@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Regenerates Formula/<server>.rb for each MCP server from its latest stable GitHub release.
 #
-# For each server it downloads the release's SHA256SUMS and the four macOS and Linux
-# archives, checks each archive against SHA256SUMS and its build provenance attestation
-# (it must have been built by that repository's release workflow), and writes a formula
-# that installs the prebuilt binary. A server whose latest release has no binary archives
-# is skipped, and its existing formula, if any, is left as it is.
+# Go servers: downloads the release's SHA256SUMS and the four macOS and Linux archives, and
+# writes a formula that installs the prebuilt binary.
+# Python servers: downloads the wheel and the hash-locked requirements file, and writes a
+# formula that installs them into a virtualenv with Homebrew's Python, from wheels only.
+#
+# Every file is checked against SHA256SUMS and its build provenance attestation, which must
+# come from that repository's release workflow. A server whose latest release doesn't have
+# these files yet is skipped, and its existing formula, if any, is left as it is.
 #
 # Usage: scripts/update-formulas.sh [server ...]   (default: every server below)
 # Needs bash 4+, gh (logged in, or GH_TOKEN) and sha256sum or shasum.
@@ -13,7 +16,9 @@
 set -euo pipefail
 
 OWNER=mattoddie
-ALL_SERVERS=(unifi-mcp proxmox-mcp hive-mcp octopus-mcp crunch-mcp)
+ALL_SERVERS=(unifi-mcp proxmox-mcp hive-mcp octopus-mcp crunch-mcp bluelink-mcp)
+PYTHON_SERVERS=(bluelink-mcp)
+PYTHON_FORMULA=python@3.14
 
 # Homebrew wants a short description that doesn't start with an article or the name.
 desc_for() {
@@ -23,6 +28,7 @@ desc_for() {
     hive-mcp) echo "MCP server for Hive heating and smart home devices" ;;
     octopus-mcp) echo "MCP server for Octopus Energy" ;;
     crunch-mcp) echo "MCP server for Crunch Accounting" ;;
+    bluelink-mcp) echo "MCP server for Hyundai Bluelink and Kia Connect" ;;
     *) echo "unknown server: $1" >&2; return 1 ;;
   esac
 }
@@ -33,6 +39,12 @@ class_for() {
   IFS=- read -ra parts <<<"$1"
   for part in "${parts[@]}"; do out+="$(tr '[:lower:]' '[:upper:]' <<<"${part:0:1}")${part:1}"; done
   echo "$out"
+}
+
+is_python() {
+  local s
+  for s in "${PYTHON_SERVERS[@]}"; do [[ "$s" == "$1" ]] && return 0; done
+  return 1
 }
 
 sha256() {
@@ -47,20 +59,47 @@ latest_tag() {
   fi
 }
 
-update_one() {
-  local server=$1 tag version work platform file sum
-  tag=$(latest_tag "$server")
-  if [[ -z "$tag" ]]; then
-    echo "::notice::$server: no release found, skipping."
-    return 0
-  fi
-  version=${tag#v}
+release_assets() {
+  gh api "repos/$OWNER/$1/releases/tags/$2" --jq '.assets[].name'
+}
 
+# Checks a downloaded release file against SHA256SUMS and its build provenance attestation,
+# which must come from the server's release workflow. Prints its SHA-256.
+verify_asset() {
+  local server=$1 dir=$2 file=$3 sum
+  sum=$(sha256 "$dir/$file")
+  if ! grep -qE "^$sum  $file\$" "$dir/SHA256SUMS"; then
+    echo "::error::$server: $file doesn't match SHA256SUMS." >&2
+    return 1
+  fi
+  gh attestation verify "$dir/$file" --repo "$OWNER/$server" \
+    --signer-workflow "$OWNER/$server/.github/workflows/release.yml" >/dev/null
+  echo "$sum"
+}
+
+caveats() {
+  cat <<EOF
+
+  def caveats
+    <<~EOS
+      $1 reads its settings from environment variables. To connect an MCP client,
+      see https://$1.mattoddie.dev/docs/deployment/#running-without-docker
+    EOS
+  end
+
+  test do
+    assert_equal version.to_s, shell_output("#{bin}/$1 version").strip
+  end
+end
+EOF
+}
+
+update_go() {
+  local server=$1 tag=$2 version=${2#v} assets work platform file
   local -a platforms=(darwin-arm64 darwin-amd64 linux-arm64 linux-amd64)
-  local assets
-  assets=$(gh api "repos/$OWNER/$server/releases/tags/$tag" --jq '[.assets[].name] | join("\n")')
-  for platform in "${platforms[@]}" SHA256SUMS; do
-    [[ "$platform" == SHA256SUMS ]] && file=SHA256SUMS || file="$server-$version-$platform.tar.gz"
+  assets=$(release_assets "$server" "$tag")
+  for file in SHA256SUMS "${platforms[@]/#/$server-$version-}"; do
+    [[ "$file" == SHA256SUMS ]] || file="$file.tar.gz"
     if ! grep -qxF "$file" <<<"$assets"; then
       echo "::notice::$server $tag has no $file (binaries were added to releases later), skipping."
       return 0
@@ -70,23 +109,15 @@ update_one() {
   work=$(mktemp -d)
   gh release download "$tag" --repo "$OWNER/$server" --dir "$work" --pattern SHA256SUMS \
     --pattern "$server-$version-darwin-*.tar.gz" --pattern "$server-$version-linux-*.tar.gz"
-
   declare -A sums=()
   for platform in "${platforms[@]}"; do
-    file="$server-$version-$platform.tar.gz"
-    sum=$(sha256 "$work/$file")
-    if ! grep -qE "^$sum  $file\$" "$work/SHA256SUMS"; then
-      echo "::error::$server $tag: $file doesn't match SHA256SUMS."
-      return 1
-    fi
-    gh attestation verify "$work/$file" --repo "$OWNER/$server" \
-      --signer-workflow "$OWNER/$server/.github/workflows/release.yml" >/dev/null
-    sums[$platform]=$sum
+    sums[$platform]=$(verify_asset "$server" "$work" "$server-$version-$platform.tar.gz")
   done
   rm -rf "$work"
 
   local base="https://github.com/$OWNER/$server/releases/download/$tag/$server-$version"
-  cat >"Formula/$server.rb" <<EOF
+  {
+    cat <<EOF
 # Generated by scripts/update-formulas.sh from the $tag release. Don't edit by hand.
 class $(class_for "$server") < Formula
   desc "$(desc_for "$server")"
@@ -118,20 +149,77 @@ class $(class_for "$server") < Formula
   def install
     bin.install "$server"
   end
-
-  def caveats
-    <<~EOS
-      $server reads its settings from environment variables. To connect an MCP client,
-      see https://$server.mattoddie.dev/docs/clients/#without-docker
-    EOS
-  end
-
-  test do
-    assert_equal version.to_s, shell_output("#{bin}/$server version").strip
-  end
-end
 EOF
+    caveats "$server"
+  } >"Formula/$server.rb"
   echo "$server: $tag"
+}
+
+update_python() {
+  local server=$1 tag=$2 version=${2#v} assets work wheel reqs wheel_sum reqs_sum
+  assets=$(release_assets "$server" "$tag")
+  wheel=$(grep -E "^${server//-/_}-.+-py3-none-any\.whl\$" <<<"$assets" || true)
+  reqs="$server-$version-requirements.txt"
+  if [[ -z "$wheel" ]] || ! grep -qxF "$reqs" <<<"$assets" || ! grep -qxF SHA256SUMS <<<"$assets"; then
+    echo "::notice::$server $tag has no wheel and requirements file (they were added to releases later), skipping."
+    return 0
+  fi
+
+  work=$(mktemp -d)
+  gh release download "$tag" --repo "$OWNER/$server" --dir "$work" \
+    --pattern SHA256SUMS --pattern "$wheel" --pattern "$reqs"
+  wheel_sum=$(verify_asset "$server" "$work" "$wheel")
+  reqs_sum=$(verify_asset "$server" "$work" "$reqs")
+  rm -rf "$work"
+
+  local base="https://github.com/$OWNER/$server/releases/download/$tag"
+  {
+    cat <<EOF
+# Generated by scripts/update-formulas.sh from the $tag release. Don't edit by hand.
+class $(class_for "$server") < Formula
+  desc "$(desc_for "$server")"
+  homepage "https://$server.mattoddie.dev"
+  url "$base/$wheel", using: :nounzip
+  sha256 "$wheel_sum"
+  license "MIT"
+
+  depends_on "$PYTHON_FORMULA"
+
+  # Every dependency, pinned with its hash. They're installed from wheels, so nothing compiles.
+  resource "requirements" do
+    url "$base/$reqs", using: :nounzip
+    sha256 "$reqs_sum"
+  end
+
+  def install
+    python = Formula["$PYTHON_FORMULA"].opt_bin/"python${PYTHON_FORMULA#python@}"
+    system python, "-m", "venv", libexec
+    pip = libexec/"bin/pip"
+    resource("requirements").stage do
+      system pip, "install", "--disable-pip-version-check", "--require-hashes", "--only-binary", ":all:",
+             "-r", "$reqs"
+    end
+    system pip, "install", "--disable-pip-version-check", "--no-deps", "$wheel"
+    bin.install_symlink libexec/"bin/$server"
+  end
+EOF
+    caveats "$server"
+  } >"Formula/$server.rb"
+  echo "$server: $tag"
+}
+
+update_one() {
+  local server=$1 tag
+  tag=$(latest_tag "$server")
+  if [[ -z "$tag" ]]; then
+    echo "::notice::$server: no release found, skipping."
+    return 0
+  fi
+  if is_python "$server"; then
+    update_python "$server" "$tag"
+  else
+    update_go "$server" "$tag"
+  fi
 }
 
 cd "$(dirname "$0")/.."
