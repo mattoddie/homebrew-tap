@@ -10,6 +10,8 @@
 | `octopus-mcp` | `brew install mattoddie/tap/octopus-mcp` | MCP server for [Octopus Energy](https://octopus-mcp.mattoddie.dev) |
 | `crunch-mcp` | `brew install mattoddie/tap/crunch-mcp` | MCP server for [Crunch Accounting](https://crunch-mcp.mattoddie.dev) |
 
+Installing with the full name, as above, also tells Homebrew 6 to [trust](https://docs.brew.sh/Tap-Trust) that formula. To use short names such as `brew install unifi-mcp`, trust the formula with `brew trust --formula mattoddie/tap/unifi-mcp`, or the whole tap with `brew trust mattoddie/tap`.
+
 A formula appears here after the first release of that server to include binaries. If `brew install` says a formula doesn't exist yet, use Docker or a Claude Desktop bundle from the server's releases page for now.
 
 ## Using a server

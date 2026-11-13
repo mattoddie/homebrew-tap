@@ -29,6 +29,8 @@ mkdir -p "$(dirname "$tap_dir")"
 cp -R . "$tap_dir"
 git -C "$tap_dir" add -A >/dev/null
 git -C "$tap_dir" -c user.name=ci -c user.email=ci@localhost commit -qm "test" --allow-empty
+# Homebrew 6 refuses formulas from taps that haven't been trusted (https://docs.brew.sh/Tap-Trust).
+brew trust mattoddie/tap
 
 for f in "${formulas[@]}"; do
   echo "::group::$f"
