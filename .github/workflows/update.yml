@@ -1,0 +1,126 @@
+# Checks every hour for new stable releases of the MCP servers and updates the formulas.
+# The new formulas are installed and tested on macOS and Linux before they're pushed to main.
+# Run it by hand with "dry run" to test without pushing, and "pre-releases" to try a release
+# candidate.
+name: Update formulas
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Test the formulas but don't push them
+        type: boolean
+        default: false
+      pre-releases:
+        description: Use the newest release even if it's a pre-release (implies dry run)
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: update-formulas
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    name: Generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+      summary: ${{ steps.diff.outputs.summary }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Generate the formulas
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INCLUDE_PRERELEASES: ${{ inputs.pre-releases || false }}
+        run: scripts/update-formulas.sh
+
+      - name: Find changes
+        id: diff
+        run: |
+          git add -N Formula
+          changed=$(git diff --name-only -- Formula | sed -n 's#^Formula/\(.*\)\.rb$#\1#p' | sort)
+          if [[ -z "$changed" ]]; then
+            echo "changed=" >> "$GITHUB_OUTPUT"
+            echo "No formula changes." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          summary=""
+          for f in $changed; do
+            v=$(sed -n 's/^  version "\(.*\)"$/\1/p' "Formula/$f.rb")
+            summary+="$f $v, "
+          done
+          summary=${summary%, }
+          echo "changed=$(echo $changed)" >> "$GITHUB_OUTPUT"
+          echo "summary=$summary" >> "$GITHUB_OUTPUT"
+          echo "Updated: $summary" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.diff.outputs.changed != ''
+        with:
+          name: formulas
+          path: Formula/*.rb
+          retention-days: 7
+
+  test:
+    name: Test (${{ matrix.os }})
+    needs: generate
+    if: needs.generate.outputs.changed != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: formulas
+          path: Formula
+
+      - name: Install and test
+        env:
+          CHANGED: ${{ needs.generate.outputs.changed }}
+        run: scripts/test-formulas.sh $CHANGED
+
+  push:
+    name: Push
+    needs: [generate, test]
+    if: needs.generate.outputs.changed != '' && !inputs.dry-run && !inputs.pre-releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # push the updated formulas
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: formulas
+          path: Formula
+
+      - name: Commit and push
+        env:
+          SUMMARY: ${{ needs.generate.outputs.summary }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula
+          git commit -m "chore(formula): update $SUMMARY"
+          git push
