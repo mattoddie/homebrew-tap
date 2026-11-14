@@ -192,7 +192,7 @@ class $(class_for "$server") < Formula
   end
 
   def install
-    python = Formula["$PYTHON_FORMULA"].opt_bin/"python${PYTHON_FORMULA#python@}"
+    python = formula_opt_bin("$PYTHON_FORMULA")/"python${PYTHON_FORMULA#python@}"
     system python, "-m", "venv", libexec
     pip = libexec/"bin/pip"
     resource("requirements").stage do
