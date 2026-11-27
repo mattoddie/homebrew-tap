@@ -10,6 +10,7 @@
 | `octopus-mcp` | `brew install mattoddie/tap/octopus-mcp` | MCP server for [Octopus Energy](https://octopus-mcp.mattoddie.dev) |
 | `crunch-mcp` | `brew install mattoddie/tap/crunch-mcp` | MCP server for [Crunch Accounting](https://crunch-mcp.mattoddie.dev) |
 | `bluelink-mcp` | `brew install mattoddie/tap/bluelink-mcp` | MCP server for [Hyundai Bluelink and Kia Connect](https://bluelink-mcp.mattoddie.dev) |
+| `emby-mcp` | `brew install mattoddie/tap/emby-mcp` | MCP server for [Emby media servers](https://emby-mcp.mattoddie.dev) |
 
 Installing with the full name, as above, also tells Homebrew 6 to [trust](https://docs.brew.sh/Tap-Trust) that formula. To use short names such as `brew install unifi-mcp`, trust the formula with `brew trust --formula mattoddie/tap/unifi-mcp`, or the whole tap with `brew trust mattoddie/tap`.
 

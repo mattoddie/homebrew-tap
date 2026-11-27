@@ -16,7 +16,7 @@
 set -euo pipefail
 
 OWNER=mattoddie
-ALL_SERVERS=(unifi-mcp proxmox-mcp hive-mcp octopus-mcp crunch-mcp bluelink-mcp)
+ALL_SERVERS=(unifi-mcp proxmox-mcp hive-mcp octopus-mcp crunch-mcp bluelink-mcp emby-mcp)
 PYTHON_SERVERS=(bluelink-mcp)
 PYTHON_FORMULA=python@3.14
 
@@ -29,6 +29,7 @@ desc_for() {
     octopus-mcp) echo "MCP server for Octopus Energy" ;;
     crunch-mcp) echo "MCP server for Crunch Accounting" ;;
     bluelink-mcp) echo "MCP server for Hyundai Bluelink and Kia Connect" ;;
+    emby-mcp) echo "MCP server for Emby media servers" ;;
     *) echo "unknown server: $1" >&2; return 1 ;;
   esac
 }
